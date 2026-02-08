@@ -7,6 +7,27 @@ description: Generate YARA rules from malware samples using yarGen-Go. Manage go
 
 Automatic YARA rule generator that extracts strings from malware samples while filtering out goodware strings.
 
+## ⚠️ Important: Initialization Time
+
+**yarGen database initialization takes 2-10 minutes** depending on hardware:
+- High-end systems: ~30-60 seconds
+- Average systems: 2-5 minutes  
+- Lower-end systems: 5-10 minutes
+
+During this time, you'll see messages like:
+`[+] Loaded dbs/good-strings-part1.db (1416757 entries)`
+
+**Do not interrupt this process** - the databases are being loaded into memory.
+
+### Single Sample vs. Batch Processing
+
+| Scenario | Method | Recommendation |
+|----------|--------|----------------|
+| **Single sample** | CLI with `-f` flag | Use `-f` for quick one-offs |
+| **Multiple samples** | Start server once | More efficient - databases loaded once |
+
+> 💡 **Recommendation:** If analyzing more than one sample, start the yarGen server (`./yargen serve`) and keep it running. The database initialization happens only once, making subsequent samples much faster to process.
+
 ## Quick Start
 
 ```bash
@@ -16,8 +37,11 @@ export YARGEN_DIR="$HOME/clawd/projects/yarGen-Go/repo"
 # 2. Download databases (first time)
 $SKILL_DIR/scripts/yargen-db.sh update
 
-# 3. Generate rules
-$SKILL_DIR/scripts/yargen-generate.sh ./malware-samples -a "Your Name" --opcodes
+# 3. Generate rules from a single file
+$SKILL_DIR/scripts/yargen-generate.sh -f ./malware.exe -a "Your Name" --opcodes
+
+# 4. Or generate from a directory
+$SKILL_DIR/scripts/yargen-generate.sh -m ./malware-samples -a "Your Name" --opcodes
 ```
 
 ## Prerequisites
@@ -33,13 +57,36 @@ go build -o yargen-util ./cmd/yargen-util
 
 ## Core Capabilities
 
-### 1. Submit Sample (Easiest)
+### 1. Single File Analysis (Quick)
 
-Submit a sample to a running yarGen server and get rules back:
+Analyze a single sample without starting the server:
 
 ```bash
-# Start server (if not running)
+# Using the wrapper script
+./yargen-generate.sh -f malware.exe -a "Author Name"
+
+# Or directly with yarGen
+./yargen -f malware.exe -a "Author Name" -o rule.yar
+
+# With opcodes (recommended for PE files)
+./yargen -f malware.exe -a "Author Name" --opcodes
+```
+
+> 💡 **Note:** When using `-f`, yarGen creates a temporary directory internally and cleans it up after processing. This is equivalent to:
+> ```bash
+> mkdir -p /tmp/yarGen-work && cp sample.exe /tmp/yarGen-work/
+> ./yargen -m /tmp/yarGen-work -a "Author" -o rule.yar
+> ```
+
+### 2. Submit Sample to Running Server (Batch)
+
+For multiple samples, start the server once and submit samples via API:
+
+```bash
+# Start server (if not running) - takes 2-10 min to initialize
 cd $YARGEN_DIR && ./yargen serve &
+
+# Wait for: "[+] Starting web server at http://127.0.0.1:8080"
 
 # Submit sample - simplest usage
 ./yargen-util submit malware.exe
@@ -65,13 +112,15 @@ Options:
 | `-v` | Verbose progress output | false |
 | `-server <url>` | yarGen server URL | `http://127.0.0.1:8080` |
 
-### 2. Generate YARA Rules (CLI)
+### 3. Generate YARA Rules from Directory (CLI)
 
-Use the generate script:
+Use the generate script for batch processing:
 ```bash
-$SKILL_DIR/scripts/yargen-generate.sh <malware-dir> [options]
+$SKILL_DIR/scripts/yargen-generate.sh -m <malware-dir> [options]
 
 Options:
+  -m <dir>        Malware directory (required for batch mode)
+  -f <file>       Single file mode (alternative to -m)
   -o <file>       Output file (default: yargen_rules.yar)
   -a <author>     Author name
   -r <reference>  Reference string
@@ -85,7 +134,7 @@ cd $YARGEN_DIR
 ./yargen -m ./malware --opcodes -a "Author"
 ```
 
-### 3. Database Management
+### 4. Database Management
 
 Use the database script:
 ```bash
@@ -102,7 +151,7 @@ Commands:
 
 See [database-guide.md](references/database-guide.md) for detailed best practices.
 
-### 4. Web API Integration
+### 5. Web API Integration
 
 Start the server:
 ```bash
@@ -134,15 +183,28 @@ See [api-reference.md](references/api-reference.md) for complete API documentati
 2. Run `yargen-db.sh update` to download databases
 3. Optionally create custom database: `yargen-db.sh create -g /opt/goodware -i local`
 
-### Daily Usage - CLI
-1. Place samples in a directory
-2. Run `yargen-generate.sh ./samples --opcodes`
-3. Review and post-process generated rules
+### Single Sample Analysis (Quick)
+1. Run `./yargen -f ./malware.exe --opcodes -a "Author"`
+2. Review and post-process generated rule
 
-### Daily Usage - API
-1. Ensure server is running: `./yargen serve`
-2. Use `yargen-api.sh full <file>` for one-shot processing
-3. Or integrate API calls into automation
+> 💡 **Note:** This will show a recommendation message suggesting the server mode for multiple samples.
+
+### Batch Processing (Efficient)
+1. Start server: `./yargen serve` (wait 2-10 min for initialization)
+2. Submit samples: `yargen-util submit -a "Author" sample1.exe`
+3. Continue submitting more samples - no re-initialization needed
+4. Stop server when done: `pkill -f "yargen serve"`
+
+**Why this is better:** The databases are loaded once and stay in memory. Each subsequent sample processes in seconds instead of minutes.
+
+### Resource Management
+
+The yarGen server keeps all goodware databases in memory (~1-2GB RAM depending on configuration).
+
+**After all work is complete**, stop the service to free memory:
+```bash
+pkill -f "yargen serve"
+```
 
 ### Database Maintenance
 1. `yargen-db.sh list` - Check database sizes
@@ -183,3 +245,6 @@ database:
 - Use `--score` to see string scoring in rule comments
 - Custom databases help reduce false positives for your environment
 - The web API is useful for automation and integrations
+- For single files, use `-f` flag instead of creating temp directories manually
+- Start the server once and keep it running when analyzing multiple samples
+- Remember to kill the server after all work is done to free up RAM
